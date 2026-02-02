@@ -6,6 +6,8 @@ import { getVehicleById, getVariants, getVehicles } from "../services/vehicleSer
 import { toast } from "react-toastify";
 import Button from "../components/ui/Button";
 import { initiateVNPayBooking } from "../services/paymentService";
+import api from "../services/api";
+import { createCustomer } from "../services/customerService";
 
 const BookingPage = () => {
   const { id } = useParams();
@@ -25,21 +27,83 @@ const BookingPage = () => {
   // Scroll to top when component mounts
   useEffect(() => {
     window.scrollTo(0, 0);
-    
-    // Get customerId from token if available
-    const token = sessionStorage.getItem('token');
-    if (token) {
+
+    // Fetch or create customer record if user is logged in
+    const fetchOrCreateCustomer = async () => {
+      const memberId = sessionStorage.getItem('memberId');
+      if (!memberId) return;
+
       try {
-        const payload = JSON.parse(atob(token.split('.')[1]));
-        if (payload.profileId) {
-          setCustomerId(payload.profileId);
+        // Try to fetch existing customer by profileId
+        const response = await api.get(`/customers/api/customers/profile/${memberId}`);
+        if (response.data?.data?.customerId) {
+          setCustomerId(response.data.data.customerId);
+          console.log('Fetched existing customerId:', response.data.data.customerId);
+          return;
         }
-      } catch (e) {
-        console.error('Error parsing token:', e);
+      } catch (error) {
+        // Customer not found (404) or database error (500)
+        if (error.response?.status === 404 || error.response?.status === 500) {
+          // Customer not found or error, create new one
+          console.log('Customer not found or error, creating new customer record...');
+          console.log('Error details:', error.response?.status, error.response?.data);
+          try {
+            // Get user info from sessionStorage
+            const userEmail = sessionStorage.getItem('email');
+            const userName = sessionStorage.getItem('name') || sessionStorage.getItem('fullName') || 'Customer';
+            const userPhone = sessionStorage.getItem('phone') || '';
+            
+            // Validate required fields
+            if (!userEmail) {
+              console.warn('Cannot create customer: email is required');
+              return;
+            }
+            
+            // Parse name into firstName and lastName
+            const nameParts = userName.trim().split(' ');
+            let firstName, lastName;
+            
+            if (nameParts.length === 1) {
+              firstName = nameParts[0];
+              lastName = nameParts[0]; // Use same as first name if no last name
+            } else {
+              lastName = nameParts[nameParts.length - 1];
+              firstName = nameParts.slice(0, -1).join(' ');
+            }
+
+            // Create customer with profileId
+            const newCustomerData = {
+              firstName: firstName || 'Customer',
+              lastName: lastName || 'User',
+              email: userEmail,
+              phone: userPhone || '',
+              customerType: 'INDIVIDUAL',
+              status: 'NEW',
+              profileId: memberId
+            };
+
+            console.log('Creating customer with data:', newCustomerData);
+            const createResponse = await api.post('/customers/api/customers', newCustomerData);
+            
+            if (createResponse.data?.data?.customerId) {
+              setCustomerId(createResponse.data.data.customerId);
+              console.log('✅ Created new customerId:', createResponse.data.data.customerId);
+              toast.success('Đã tạo hồ sơ khách hàng thành công!');
+            }
+          } catch (createError) {
+            console.error('Error creating customer:', createError);
+            console.error('Error details:', createError.response?.data);
+            toast.warning('Không thể tạo hồ sơ khách hàng. Bạn vẫn có thể đặt cọc như khách vãng lai.');
+          }
+        } else {
+          console.error('Error fetching customerId:', error);
+        }
       }
-    }
+    };
+
+    fetchOrCreateCustomer();
   }, []);
-  
+
   // Form data for step 2
   const [formData, setFormData] = useState({
     fullName: '',
@@ -52,27 +116,54 @@ const BookingPage = () => {
     notes: ''
   });
 
-  // Showroom data by city
-  const showroomData = {
-    'Hà Nội': [
-      { id: 1, name: 'VinFast Hà Nội - Phạm Hùng' },
-      { id: 2, name: 'VinFast Hà Nội - Lê Văn Lương' },
-      { id: 3, name: 'VinFast Hà Nội - Trần Dân' },
-    ],
-    'TP HCM': [
-      { id: 4, name: 'VinFast TP.HCM - Nguyễn Văn Linh' },
-      { id: 5, name: 'VinFast TP.HCM - Lê Văn Việt' },
-      { id: 6, name: 'VinFast TP.HCM - Xa lộ Hà Nội' },
-    ],
-    'Đà Nẵng': [
-      { id: 7, name: 'VinFast Đà Nẵng - Nguyễn Văn Linh' },
-      { id: 8, name: 'VinFast Đà Nẵng - Điện Biên Phủ' },
-    ],
-    'Hải Phòng': [
-      { id: 9, name: 'VinFast Hải Phòng - Lạch Tray' },
-      { id: 10, name: 'VinFast Hải Phòng - Nguyễn Bỉnh Khiêm' },
-    ],
-  };
+  // Showroom states
+  const [showroomData, setShowroomData] = useState({});
+  const [dealers, setDealers] = useState([]);
+
+  // Fetch dealers on mount
+  useEffect(() => {
+    const fetchDealers = async () => {
+      try {
+        // Dynamic import to avoid circular dependencies if any
+        const { getAllDealers } = await import("../services/dealerService");
+        const response = await getAllDealers();
+        if (response && response.data) {
+          const allDealers = response.data;
+          setDealers(allDealers);
+
+          // Group by city
+          const grouped = allDealers.reduce((acc, dealer) => {
+            const city = dealer.city || 'Khác';
+            if (!acc[city]) {
+              acc[city] = [];
+            }
+            acc[city].push({
+              id: dealer.dealerId, // UUID
+              name: dealer.dealerName,
+              address: dealer.address
+            });
+            return acc;
+          }, {});
+
+          setShowroomData(grouped);
+        }
+      } catch (error) {
+        console.error("Error fetching dealers:", error);
+        // Fallback to static data if API fails
+        setShowroomData({
+          'Hà Nội': [
+            { id: 'static-1', name: 'VinFast Hà Nội - Phạm Hùng' },
+            { id: 'static-2', name: 'VinFast Hà Nội - Lê Văn Lương' },
+          ],
+          'TP HCM': [
+            { id: 'static-3', name: 'VinFast TP.HCM - Nguyễn Văn Linh' },
+          ]
+        });
+      }
+    };
+
+    fetchDealers();
+  }, []);
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -81,10 +172,22 @@ const BookingPage = () => {
         ...prev,
         [name]: value
       };
+
       // Reset showroom when city changes
       if (name === 'showroomCity') {
         newData.showroom = '';
+        newData.dealerId = '';
       }
+
+      // Capture dealer UUID when showroom name is selected
+      if (name === 'showroom') {
+        const cityDealers = showroomData[prev.showroomCity] || [];
+        const selectedDealer = cityDealers.find(d => d.name === value);
+        if (selectedDealer) {
+          newData.dealerId = selectedDealer.id;
+        }
+      }
+
       return newData;
     });
   };
@@ -136,12 +239,12 @@ const BookingPage = () => {
   useEffect(() => {
     if (variantsData && variantsData.length > 0) {
       const variantId = searchParams.get('variantId');
-      const variant = variantId 
+      const variant = variantId
         ? variantsData.find(v => v.variantId === parseInt(variantId))
         : variantsData[0];
-      
+
       setSelectedVariant(variant || variantsData[0]);
-      
+
       // Set initial color
       try {
         if (variant?.colorImages) {
@@ -212,7 +315,7 @@ const BookingPage = () => {
 
   const handleVariantSelect = (variant) => {
     setSelectedVariant(variant);
-    
+
     // Try to get colorImages data
     let colorImagesData = [];
     try {
@@ -314,16 +417,20 @@ const BookingPage = () => {
     try {
       const depositAmount = 30000000; // 30 triệu VNĐ
       const bookingData = {
-        variantId: selectedVariant?.variantId,
         modelId: id,
-        // customerId: customerId || null, // Không cần cho guest booking
+        modelName: vehicleData.modelName,
+        variantId: selectedVariant?.variantId,
+        variantName: selectedVariant?.versionName,
+        customerId: customerId || null, // Send customerId (Long) if user is logged in
         customerName: formData.fullName,
         customerPhone: formData.phone,
         customerEmail: formData.email,
         customerIdCard: formData.idCard,
         exteriorColor: selectedColor?.color,
         interiorColor: selectedInterior?.name,
+        imageUrl: selectedColor?.imageUrl || selectedVariant?.imageUrl || vehicleData.thumbnailUrl,
         showroom: formData.showroom,
+        dealerId: formData.dealerId, // Send UUID
         showroomCity: formData.showroomCity,
         notes: formData.notes,
         promoCode: formData.promoCode,
@@ -333,11 +440,13 @@ const BookingPage = () => {
         orderInfo: `Dat coc xe ${vehicleData.modelName} - ${formData.fullName}`
       };
 
-      console.log('Booking data:', bookingData); // Debug log
+      console.log('🚀 Booking data:', bookingData);
+      console.log('📋 Customer ID:', customerId);
+      console.log('👤 User memberId:', sessionStorage.getItem('memberId')); // Debug log
 
       // Call API to initiate VNPay payment
       const response = await initiateVNPayBooking(bookingData);
-      
+
       if (response && response.url) {
         // Redirect to VNPay payment page
         window.location.href = response.url;
@@ -411,7 +520,7 @@ const BookingPage = () => {
               <ChevronUp className="w-10 h-10 text-gray-700" strokeWidth={3} />
             </button>
 
-            <div 
+            <div
               ref={vehicleListRef}
               onWheel={(e) => {
                 if (vehicleListRef.current) {
@@ -420,9 +529,9 @@ const BookingPage = () => {
                 }
               }}
               className="space-y-3 overflow-y-hidden pr-2"
-              style={{ 
-                overflowY: 'scroll', 
-                scrollbarWidth: 'none', 
+              style={{
+                overflowY: 'scroll',
+                scrollbarWidth: 'none',
                 msOverflowStyle: 'none',
                 height: '480px'
               }}
@@ -431,11 +540,10 @@ const BookingPage = () => {
                 <button
                   key={vehicle.modelId}
                   onClick={() => navigate(`/booking/${vehicle.modelId}`)}
-                  className={`w-full transition-all ${
-                    parseInt(id) === vehicle.modelId
-                      ? 'bg-gray-50 opacity-100'
-                      : 'bg-gray-50 hover:bg-gray-100 opacity-40 hover:opacity-60'
-                  } rounded-lg overflow-hidden py-3`}
+                  className={`w-full transition-all ${parseInt(id) === vehicle.modelId
+                    ? 'bg-gray-50 opacity-100'
+                    : 'bg-gray-50 hover:bg-gray-100 opacity-40 hover:opacity-60'
+                    } rounded-lg overflow-hidden py-3`}
                 >
                   <div className="flex items-center justify-center px-3 mb-2">
                     <img
@@ -507,7 +615,7 @@ const BookingPage = () => {
                     <div className="bg-white px-4 py-2 rounded-full shadow-lg flex items-center gap-2">
                       <div className="w-6 h-6 bg-gray-200 rounded-full flex items-center justify-center">
                         <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-                          <path d="M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11c-.66 0-1.21.42-1.42 1.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99zM6.5 16c-.83 0-1.5-.67-1.5-1.5S5.67 13 6.5 13s1.5.67 1.5 1.5S7.33 16 6.5 16zm11 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zM5 11l1.5-4.5h11L19 11H5z"/>
+                          <path d="M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11c-.66 0-1.21.42-1.42 1.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99zM6.5 16c-.83 0-1.5-.67-1.5-1.5S5.67 13 6.5 13s1.5.67 1.5 1.5S7.33 16 6.5 16zm11 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zM5 11l1.5-4.5h11L19 11H5z" />
                         </svg>
                       </div>
                       <span className="font-semibold text-sm">{vehicleData.modelName}</span>
@@ -538,8 +646,8 @@ const BookingPage = () => {
                 </div>
 
                 <p className="text-xs text-gray-400 text-center mt-3 px-2">
-                  Quãng đường di chuyển được tính toán dựa trên kết quả kiểm định theo quy chuẩn toàn cầu của WNEDC. 
-                  Quãng đường di chuyển thực tế có thể ảnh hưởng bởi điều kiện, thói quen sử dụng của người lái, chế 
+                  Quãng đường di chuyển được tính toán dựa trên kết quả kiểm định theo quy chuẩn toàn cầu của WNEDC.
+                  Quãng đường di chuyển thực tế có thể ảnh hưởng bởi điều kiện, thói quen sử dụng của người lái, chế
                   độ lái xe đã được cài đặt, số lượng hành khách và các điều kiện giao thông khác.
                 </p>
 
@@ -551,7 +659,7 @@ const BookingPage = () => {
           </div>
 
           {/* Right Sidebar - Configuration */}
-          <div 
+          <div
             ref={sidebarRef}
             onWheel={(e) => {
               if (sidebarRef.current) {
@@ -608,17 +716,15 @@ const BookingPage = () => {
                         <button
                           key={variant.variantId}
                           onClick={() => handleVariantSelect(variant)}
-                          className={`w-full flex items-center gap-3 p-3 rounded-lg border-2 transition-all ${
-                            selectedVariant?.variantId === variant.variantId
-                              ? 'border-blue-600 bg-blue-50'
-                              : 'border-gray-200 hover:border-gray-300'
-                          }`}
+                          className={`w-full flex items-center gap-3 p-3 rounded-lg border-2 transition-all ${selectedVariant?.variantId === variant.variantId
+                            ? 'border-blue-600 bg-blue-50'
+                            : 'border-gray-200 hover:border-gray-300'
+                            }`}
                         >
-                          <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
-                            selectedVariant?.variantId === variant.variantId
-                              ? 'border-blue-600'
-                              : 'border-gray-300'
-                          }`}>
+                          <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${selectedVariant?.variantId === variant.variantId
+                            ? 'border-blue-600'
+                            : 'border-gray-300'
+                            }`}>
                             {selectedVariant?.variantId === variant.variantId && (
                               <div className="w-3 h-3 rounded-full bg-blue-600"></div>
                             )}
@@ -646,11 +752,10 @@ const BookingPage = () => {
                         <button
                           key={index}
                           onClick={() => handleColorSelect(color)}
-                          className={`aspect-square rounded-lg border-2 transition-all hover:scale-105 ${
-                            selectedColor?.color === color.color
-                              ? 'border-blue-600 shadow-lg scale-105'
-                              : 'border-gray-300'
-                          }`}
+                          className={`aspect-square rounded-lg border-2 transition-all hover:scale-105 ${selectedColor?.color === color.color
+                            ? 'border-blue-600 shadow-lg scale-105'
+                            : 'border-gray-300'
+                            }`}
                           style={{ backgroundColor: color.colorCode }}
                           title={color.color}
                         >
@@ -671,11 +776,10 @@ const BookingPage = () => {
                             <button
                               key={index}
                               onClick={() => handleColorSelect(color)}
-                              className={`aspect-square rounded-lg border-2 transition-all hover:scale-105 ${
-                                selectedColor?.color === color.color
-                                  ? 'border-blue-600 shadow-lg scale-105'
-                                  : 'border-gray-300'
-                              }`}
+                              className={`aspect-square rounded-lg border-2 transition-all hover:scale-105 ${selectedColor?.color === color.color
+                                ? 'border-blue-600 shadow-lg scale-105'
+                                : 'border-gray-300'
+                                }`}
                               style={{ backgroundColor: color.colorCode }}
                               title={color.color}
                             >
@@ -700,11 +804,10 @@ const BookingPage = () => {
                         <button
                           key={index}
                           onClick={() => setSelectedInterior(color)}
-                          className={`aspect-square rounded-lg border-2 transition-all hover:scale-105 ${
-                            selectedInterior?.name === color.name
-                              ? 'border-blue-600 shadow-lg scale-105'
-                              : 'border-gray-300'
-                          }`}
+                          className={`aspect-square rounded-lg border-2 transition-all hover:scale-105 ${selectedInterior?.name === color.name
+                            ? 'border-blue-600 shadow-lg scale-105'
+                            : 'border-gray-300'
+                            }`}
                           style={{ backgroundColor: color.color }}
                           title={color.name}
                         >
@@ -839,10 +942,13 @@ const BookingPage = () => {
                           className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                         >
                           <option value="">Chọn tỉnh thành</option>
-                          <option value="Hà Nội">Hà Nội</option>
-                          <option value="TP HCM">TP Hồ Chí Minh</option>
-                          <option value="Đà Nẵng">Đà Nẵng</option>
-                          <option value="Hải Phòng">Hải Phòng</option>
+                          {Object.keys(showroomData).sort().map(city => (
+                            <option key={city} value={city}>
+                              {city === 'Ho Chi Minh City' ? 'TP. Hồ Chí Minh' :
+                                city === 'Hanoi' ? 'Hà Nội' :
+                                  city === 'Da Nang' ? 'Đà Nẵng' : city}
+                            </option>
+                          ))}
                         </select>
                         <select
                           name="showroom"
@@ -854,7 +960,7 @@ const BookingPage = () => {
                           <option value="">Chọn showroom</option>
                           {formData.showroomCity && showroomData[formData.showroomCity]?.map(showroom => (
                             <option key={showroom.id} value={showroom.name}>
-                              {showroom.name}
+                              {showroom.name} - {showroom.address}
                             </option>
                           ))}
                         </select>
@@ -975,7 +1081,7 @@ const BookingPage = () => {
                   <div>
                     <h4 className="font-semibold text-gray-900 mb-3">Hình thức thanh toán</h4>
                     <p className="text-sm text-gray-600 mb-3">Thanh toán trực tuyến qua cổng VNPay</p>
-                    
+
                     <div className="space-y-3">
                       <label className="flex items-center p-4 border-2 border-blue-600 bg-blue-50 rounded-lg">
                         <input type="radio" name="paymentMethod" value="vnpay" className="w-4 h-4 text-blue-600" defaultChecked />
@@ -1032,21 +1138,21 @@ const BookingPage = () => {
                   className="flex-1 py-3"
                 >
                   Quay lại
+                </Button>
+              )}
+              <Button
+                onClick={handleNextStep}
+                disabled={isProcessing}
+                className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-3 font-semibold disabled:bg-gray-400 disabled:cursor-not-allowed"
+              >
+                {isProcessing ? 'Đang xử lý...' : (currentStep === 3 ? 'Thanh toán đặt cọc' : 'Tiếp tục')}
               </Button>
-            )}
-            <Button
-              onClick={handleNextStep}
-              disabled={isProcessing}
-              className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-3 font-semibold disabled:bg-gray-400 disabled:cursor-not-allowed"
-            >
-              {isProcessing ? 'Đang xử lý...' : (currentStep === 3 ? 'Thanh toán đặt cọc' : 'Tiếp tục')}
-            </Button>
+            </div>
           </div>
         </div>
       </div>
     </div>
-  </div>
-);
+  );
 };
 
 export default BookingPage;

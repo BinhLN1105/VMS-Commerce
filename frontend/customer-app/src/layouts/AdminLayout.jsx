@@ -14,7 +14,9 @@ import {
   Menu,
   X,
   LogOut,
-  FolderTree
+  FolderTree,
+  DollarSign,
+  Settings
 } from 'lucide-react';
 
 export default function AdminLayout() {
@@ -38,16 +40,18 @@ export default function AdminLayout() {
   };
 
   const menuItems = [
-    { icon: LayoutDashboard, label: 'Tổng quan', path: '/admin' },
+    { icon: LayoutDashboard, label: 'Dashboard', path: '/admin' },
     { icon: Car, label: 'Quản lý xe', path: '/admin/vehicles' },
     { icon: FolderTree, label: 'Danh mục', path: '/admin/categories' },
     { icon: ShoppingCart, label: 'Đơn hàng', path: '/admin/orders' },
+    { icon: DollarSign, label: 'Booking Deposits', path: '/admin/booking-deposits' },
     { icon: Users, label: 'Khách hàng', path: '/admin/customers' },
     { icon: Calendar, label: 'Lịch lái thử', path: '/admin/test-drives' },
     { icon: CreditCard, label: 'Thanh toán', path: '/admin/payments' },
     { icon: Tag, label: 'Khuyến mãi', path: '/admin/promotions' },
     { icon: Star, label: 'Đánh giá', path: '/admin/reviews' },
     { icon: BarChart3, label: 'Báo cáo', path: '/admin/reports' },
+    { icon: Settings, label: 'Cài đặt', path: '/admin/settings' },
   ];
 
   const isActive = (path) => {
